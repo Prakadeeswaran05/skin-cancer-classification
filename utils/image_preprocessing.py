@@ -14,24 +14,20 @@ def noiseless_mask(mask):
         cleaned_mask: A binary mask with small noise elements removed
     """
     
-    cleaned_mask = np.zeros_like(mask)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (1, 1))
-    tophat_result = np.zeros_like(mask)
-    tophat = cv2.morphologyEx(mask, cv2.MORPH_TOPHAT, kernel)
-    tophat_result = np.maximum(tophat_result, tophat)
-    enhanced = cv2.add(mask, tophat_result)
-    dist_transform = cv2.distanceTransform(enhanced, cv2.DIST_L2, 3)
-    _, sure_fg = cv2.threshold(dist_transform, 0.1 * dist_transform.max(), 255, 0)
-    sure_fg = sure_fg.astype(np.uint8)
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(sure_fg, connectivity=8)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
     areas = np.bincount(labels.flatten())
     lut = np.zeros(num_labels, dtype=np.uint8)
-    lut[1:] = np.where(areas[1:] >= 20, 255, 0)
-    cleaned_mask = lut[labels]
+    max_area = np.max(areas[1:]) if len(areas) > 1 else 0
+    # Set threshold as a percentage of the largest area
+    threshold_percentage = 0.005 # Keep components that are at least 0.5% of the largest
+    threshold = max_area * threshold_percentage
+    threshold=max(20,threshold)
     
+    lut[1:] = np.where(areas[1:] >= threshold, 255, 0)
+    cleaned_mask = lut[labels]
     return cleaned_mask
     
-def adaptive_dullrazor(img_path, lowbound=20, showimgs=True, inpaintmat=3):
+def adaptive_dullrazor(img_path, lowbound=20,inpaintmat=3):
     """
     Removes hair-like structures from images using an adaptive DullRazor approach.
     
@@ -42,7 +38,6 @@ def adaptive_dullrazor(img_path, lowbound=20, showimgs=True, inpaintmat=3):
     Args:
         img_path: Path to the input image
         lowbound: Threshold value for detecting dark structures (default=20)
-        showimgs: Boolean flag to display intermediate results (default=True)
         inpaintmat: Size of neighborhood for inpainting (default=3)
         
     Returns:
@@ -51,7 +46,11 @@ def adaptive_dullrazor(img_path, lowbound=20, showimgs=True, inpaintmat=3):
     """
     img = cv2.imread(img_path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 20, 150)
+    mean_val, std_dev = cv2.meanStdDev(gray)
+    mean_val, std_dev = mean_val[0][0], std_dev[0][0]
+    lower_thresh = int(max(0, mean_val - std_dev))
+    upper_thresh = int(min(255, mean_val + std_dev))
+    edges = cv2.Canny(gray, lower_thresh, upper_thresh)
     edge_density = np.sum(edges > 0) / (edges.shape[0] * edges.shape[1])
     filterstruc = max(3, min(12, int(10 * (1 - edge_density) + 3)))
     filterSize = (filterstruc, filterstruc)
@@ -86,10 +85,9 @@ def smoothen_rounded_border(image):
     img_center_y = img_height / 2
     img_area = img_height * img_width
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     # Use Hough Circle Transform to detect circles
     circles = cv2.HoughCircles(
-        blurred,
+        gray,
         cv2.HOUGH_GRADIENT,
         dp=1.2, minDist=20,
         param1=50, param2=30, minRadius=40, maxRadius=200
@@ -98,78 +96,61 @@ def smoothen_rounded_border(image):
         return image
 
     circles = np.uint16(np.around(circles))
-    if len(circles[0]) > 0:
-        center_x, center_y, radius = circles[0][0]
-        circle_area = np.pi * (radius ** 2)
-        area_percentage = (circle_area / img_area) * 100
-        center_x_diff = abs(center_x - img_center_x)
-        center_y_diff = abs(center_y - img_center_y)
-        x_threshold = img_width * 0.1
-        y_threshold = img_height * 0.1
-        
-        is_centered = center_x_diff < x_threshold and center_y_diff < y_threshold
-        covers_enough = area_percentage >= 25
-        circle_mask = np.zeros((img_height, img_width), dtype=np.uint8)
-        cv2.circle(circle_mask, (center_x, center_y), radius, 255, -1)
-        circle_mask = cv2.GaussianBlur(circle_mask, (15,15),0)
-        # Create outside circle mask - white (255) outside the circle, black (0) inside
-        outside_mask = cv2.bitwise_not(circle_mask)
-        outside_indices = np.where(outside_mask > 0)
-        background_pixels = gray[outside_indices]
-        
-        # Check if at least 40% of the background pixels have values less than 10
-        dark_pixels_ratio = np.sum(background_pixels < 10) / len(background_pixels) if len(background_pixels) > 0 else 0
-        has_dark_background = dark_pixels_ratio >= 0.4
-       
-        # Only process if the circle meets all criteria
-        if is_centered and covers_enough and has_dark_background:
+    
+    center_x, center_y, radius = circles[0][0]
+    circle_area = np.pi * (radius ** 2)
+    area_percentage = (circle_area / img_area) * 100
+    center_x_diff = abs(center_x - img_center_x)
+    center_y_diff = abs(center_y - img_center_y)
+    x_threshold = img_width * 0.1
+    y_threshold = img_height * 0.1
+    
+    is_centered = center_x_diff < x_threshold and center_y_diff < y_threshold
+    covers_enough = area_percentage >= 25
+    circle_mask = np.zeros((img_height, img_width), dtype=np.uint8)
+    cv2.circle(circle_mask, (center_x, center_y), radius, 255, -1)
+    circle_mask = cv2.GaussianBlur(circle_mask, (15,15),0)
+    # Create outside circle mask - white (255) outside the circle, black (0) inside
+    outside_mask = cv2.bitwise_not(circle_mask)
+    outside_indices = np.where(outside_mask > 0)
+    background_pixels = gray[outside_indices]
+    
+    # Check if at least 40% of the background pixels have values less than 10
+    dark_pixels_ratio = np.sum(background_pixels < 10) / len(background_pixels) if len(background_pixels) > 0 else 0
+    has_dark_background = dark_pixels_ratio >= 0.4
+    
+    # Only process if the circle meets all criteria
+    if is_centered and covers_enough and has_dark_background:
 
-            y_coords, x_coords = np.ogrid[:img_height, :img_width]
-            dist_from_center = np.sqrt((x_coords - center_x)**2 + (y_coords - center_y)**2)
-            angles = np.arctan2(y_coords - center_y, x_coords - center_x + 1e-10)
-            fade_distance = radius * 3.5  # How far outside the circle to extend the gradient
-            alpha = np.zeros((img_height, img_width), dtype=np.float32)
-            
-            # Get mask as boolean array
-            outside_bool = outside_mask > 0
-            outside_distances = dist_from_center[outside_bool]
-            alpha[outside_bool] = 1.0 - ((outside_distances - radius) / fade_distance)
-            alpha[alpha < 0] = 0  
-            
-            # Create output image
-            result = image.copy()
-            #plt.imshow(result)
-            y_outside, x_outside = outside_indices
-            
-           
-            for i in range(len(y_outside)):
-                y = y_outside[i]
-                x = x_outside[i]  
-                # Get the angle of this pixel
-                pixel_angle = angles[y, x]
-                # Find the corresponding point inside the circle
-                sample_radius = radius * 0.8  # Sample from inside circle to avoid edge effects
-                sample_x = int(center_x + sample_radius * np.cos(pixel_angle))
-                sample_y = int(center_y + sample_radius * np.sin(pixel_angle))         
-                # Ensure sample point is within image bounds
-                sample_x = max(0, min(sample_x, img_width - 1))
-                sample_y = max(0, min(sample_y, img_height - 1))           
-                # Get the sampled color
-                sampled_color = image[sample_y, sample_x].astype(np.float32)        
-                # Blend original with sampled color based on alpha
-                weight = alpha[y, x]
-                result[y, x] = (1.0 - weight) * result[y, x] + weight * sampled_color
-            
-            # Convert back to uint8    
-            result = np.clip(result, 0, 255).astype(np.uint8)
-            
-            return result
-            
-            
-        else:
-            return image
+        y_coords, x_coords = np.ogrid[:img_height, :img_width]
+        angles = np.arctan2(y_coords - center_y, x_coords - center_x + 1e-10)
+        
+        # Set constant alpha value for all pixels outside the circle
+        constant_weight = 1.0 
+        
+        y_outside, x_outside = outside_indices
+        
+        for i in range(len(y_outside)):
+            y = y_outside[i]
+            x = x_outside[i]  
+            # Get the angle of this pixel
+            pixel_angle = angles[y, x]
+            # Find the corresponding point inside the circle
+            sample_radius = radius * 0.8  # Sample from inside circle to avoid edge effects
+            sample_x = int(center_x + sample_radius * np.cos(pixel_angle))
+            sample_y = int(center_y + sample_radius * np.sin(pixel_angle))         
+            # Ensure sample point is within image bounds
+            sample_x = max(0, min(sample_x, img_width - 1))
+            sample_y = max(0, min(sample_y, img_height - 1))           
+            # Get the sampled color
+            sampled_color = image[sample_y, sample_x]      
+            result[y, x] = (1.0 - constant_weight) * result[y, x] + constant_weight * sampled_color
+        
+        return result
+        
     else:
         return image
+  
 
 def preprocessing(img_path):
     """
@@ -185,4 +166,3 @@ def preprocessing(img_path):
     final = smoothen_rounded_border(img_final)
     final= cv2.cvtColor(final, cv2.COLOR_RGB2BGR)    
     return final
-

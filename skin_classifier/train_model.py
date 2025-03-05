@@ -21,28 +21,40 @@ class FocalLoss(nn.Module):
         self.alpha = alpha
         self.gamma = gamma
         self.reduction = reduction
-
+        
     def forward(self, inputs, targets):
-        num_classes = inputs.size(1)
-        targets_one_hot = F.one_hot(targets, num_classes=num_classes).float()
-        probs = F.softmax(inputs, dim=1)
-        pt = torch.sum(targets_one_hot * probs, dim=1)  # Get the probability of the true class
-        focal_weight = (1 - pt) ** self.gamma  # Apply focusing parameter
+        log_probs = F.log_softmax(inputs, dim=1)
+        probs = torch.exp(log_probs)
+        targets_one_hot = F.one_hot(targets, num_classes=inputs.size(1)).float()
+        pt = (targets_one_hot * probs).sum(dim=1)  # Probability of target class
+        focal_weight = (1 - pt) ** self.gamma
+        
+
         if self.alpha is not None:
-            alpha_t = torch.sum(targets_one_hot * self.alpha.view(1, -1), dim=1)
-            focal_weight = alpha_t * focal_weight
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-        focal_loss = focal_weight * ce_loss
+            if isinstance(self.alpha, torch.Tensor):
+                alpha_t = self.alpha.gather(0, targets)
+                focal_weight = alpha_t * focal_weight
+            else:
+                alpha_t = self.alpha * targets_one_hot + (1 - self.alpha) * (1 - targets_one_hot)
+                alpha_t = alpha_t.gather(1, targets.unsqueeze(1)).squeeze(1)
+                focal_weight = alpha_t * focal_weight
+        
+       
+        loss = F.nll_loss(log_probs, targets, reduction='none')
+        focal_loss = focal_weight * loss
+        
+        # Apply reduction
         if self.reduction == 'mean':
             return focal_loss.mean()
         elif self.reduction == 'sum':
             return focal_loss.sum()
         else:
             return focal_loss
+        
 
 
 class SkinCancerClassifier:
-    def __init__(self, root_dir, model_type='efficientnet_b0', batch_size=24, num_workers=4, seed=42):
+    def __init__(self, root_dir, model_type='efficientnet_b0', batch_size=16, num_workers=2, seed=42):
         """
         Initialize the skin cancer classifier.
         

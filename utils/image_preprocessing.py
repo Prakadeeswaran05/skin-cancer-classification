@@ -14,24 +14,20 @@ def noiseless_mask(mask):
         cleaned_mask: A binary mask with small noise elements removed
     """
     
-    cleaned_mask = np.zeros_like(mask)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (1, 1))
-    tophat_result = np.zeros_like(mask)
-    tophat = cv2.morphologyEx(mask, cv2.MORPH_TOPHAT, kernel)
-    tophat_result = np.maximum(tophat_result, tophat)
-    enhanced = cv2.add(mask, tophat_result)
-    dist_transform = cv2.distanceTransform(enhanced, cv2.DIST_L2, 3)
-    _, sure_fg = cv2.threshold(dist_transform, 0.1 * dist_transform.max(), 255, 0)
-    sure_fg = sure_fg.astype(np.uint8)
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(sure_fg, connectivity=8)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
     areas = np.bincount(labels.flatten())
     lut = np.zeros(num_labels, dtype=np.uint8)
-    lut[1:] = np.where(areas[1:] >= 20, 255, 0)
-    cleaned_mask = lut[labels]
+    max_area = np.max(areas[1:]) if len(areas) > 1 else 0
+    # Set threshold as a percentage of the largest area
+    threshold_percentage = 0.005 # Keep components that are at least 0.5% of the largest
+    threshold = max_area * threshold_percentage
+    threshold=max(20,threshold)
     
+    lut[1:] = np.where(areas[1:] >= threshold, 255, 0)
+    cleaned_mask = lut[labels]
     return cleaned_mask
     
-def adaptive_dullrazor(img_path, lowbound=20, showimgs=True, inpaintmat=3):
+def adaptive_dullrazor(img_path, lowbound=20,inpaintmat=3):
     """
     Removes hair-like structures from images using an adaptive DullRazor approach.
     
@@ -42,7 +38,6 @@ def adaptive_dullrazor(img_path, lowbound=20, showimgs=True, inpaintmat=3):
     Args:
         img_path: Path to the input image
         lowbound: Threshold value for detecting dark structures (default=20)
-        showimgs: Boolean flag to display intermediate results (default=True)
         inpaintmat: Size of neighborhood for inpainting (default=3)
         
     Returns:
@@ -51,7 +46,11 @@ def adaptive_dullrazor(img_path, lowbound=20, showimgs=True, inpaintmat=3):
     """
     img = cv2.imread(img_path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 20, 150)
+    mean_val, std_dev = cv2.meanStdDev(gray)
+    mean_val, std_dev = mean_val[0][0], std_dev[0][0]
+    lower_thresh = int(max(0, mean_val - std_dev))
+    upper_thresh = int(min(255, mean_val + std_dev))
+    edges = cv2.Canny(gray, lower_thresh, upper_thresh)
     edge_density = np.sum(edges > 0) / (edges.shape[0] * edges.shape[1])
     filterstruc = max(3, min(12, int(10 * (1 - edge_density) + 3)))
     filterSize = (filterstruc, filterstruc)
@@ -125,23 +124,13 @@ def smoothen_rounded_border(image):
         if is_centered and covers_enough and has_dark_background:
 
             y_coords, x_coords = np.ogrid[:img_height, :img_width]
-            dist_from_center = np.sqrt((x_coords - center_x)**2 + (y_coords - center_y)**2)
             angles = np.arctan2(y_coords - center_y, x_coords - center_x + 1e-10)
-            fade_distance = radius * 3.5  # How far outside the circle to extend the gradient
-            alpha = np.zeros((img_height, img_width), dtype=np.float32)
             
-            # Get mask as boolean array
-            outside_bool = outside_mask > 0
-            outside_distances = dist_from_center[outside_bool]
-            alpha[outside_bool] = 1.0 - ((outside_distances - radius) / fade_distance)
-            alpha[alpha < 0] = 0  
+            # Set constant alpha value for all pixels outside the circle
+            constant_weight = 1.0 
             
-            # Create output image
-            result = image.copy()
-            #plt.imshow(result)
             y_outside, x_outside = outside_indices
             
-           
             for i in range(len(y_outside)):
                 y = y_outside[i]
                 x = x_outside[i]  
@@ -156,15 +145,12 @@ def smoothen_rounded_border(image):
                 sample_y = max(0, min(sample_y, img_height - 1))           
                 # Get the sampled color
                 sampled_color = image[sample_y, sample_x].astype(np.float32)        
-                # Blend original with sampled color based on alpha
-                weight = alpha[y, x]
-                result[y, x] = (1.0 - weight) * result[y, x] + weight * sampled_color
+                result[y, x] = (1.0 - constant_weight) * result[y, x] + constant_weight * sampled_color
             
             # Convert back to uint8    
             result = np.clip(result, 0, 255).astype(np.uint8)
             
             return result
-            
             
         else:
             return image
@@ -185,4 +171,3 @@ def preprocessing(img_path):
     final = smoothen_rounded_border(img_final)
     final= cv2.cvtColor(final, cv2.COLOR_RGB2BGR)    
     return final
-

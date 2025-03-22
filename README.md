@@ -1,6 +1,12 @@
 ## Skin Cancer Classification
 The goal of this project is to classify images into Benign or Malignant category.
 
+## Gemini Agent Based Classification
+![Demo](/results/final.gif)
+```bash
+streamlit run agent.py
+```
+Gemini-based AI agent to assess skin lesions using the ABCDE criteria — Asymmetry, Border irregularity, Color variation, Diameter, and Evolution/Elevation. The agent not only evaluates each criterion but also provides clear, patient-friendly explanations, making complex medical insights accessible and understandable.
 ## Dataset Exploration
 First look at some images from the dataset
 

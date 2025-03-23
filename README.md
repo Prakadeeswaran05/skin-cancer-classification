@@ -26,9 +26,7 @@ First look at some images from the dataset
   To combat this issue created an adaptive DullRazor algorithm combined with few other image processing techniques to effectively remove hair while preserving crucial lesion details.
   ![Hair Removal](results/combined_hair_removal_results.png)
 
-  ### Circular Mask Smoothening
-  Created artificial border using a radial gradient-based approach to extend colors from the circle to the black area.
-  ![Circular Smoothening](results/combined_border_smoothening.png)
+
 
 
 
